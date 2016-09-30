@@ -49,21 +49,22 @@ int def(int source, int dest, int level)
     strm.zfree = Sirikata::MemMgrAllocatorFree;
     strm.opaque = mem_mgr_opaque;
     ret = deflateInit(&strm, level);
-    if (ret != Z_OK)
+    if (ret != Z_OK) {
         return ret;
-        if (!Sirikata::installStrictSyscallFilter(false)) {
-          abort();
-        }
+    }
+    if (!Sirikata::installStrictSyscallFilter(false)) {
+        abort();
+    }
     /* compress until end of file */
     do {
          auto status = read(source, in, CHUNK);
-	 if (status < 0) {
-	   if (errno == EINTR) {
-	     continue;
-	   } else {
-	     return Z_STREAM_ERROR;
-	   }
-	 }
+         if (status < 0) {
+           if (errno == EINTR) {
+             continue;
+           } else {
+             return Z_STREAM_ERROR;
+           }
+         }
         strm.avail_in = status;
 
         flush = status == 0 ? Z_FINISH : Z_NO_FLUSH;
@@ -77,22 +78,22 @@ int def(int source, int dest, int level)
             ret = deflate(&strm, flush);    /* no bad return value */
             assert(ret != Z_STREAM_ERROR);  /* state not clobbered */
             have = CHUNK - strm.avail_out;
-	    const unsigned char * tmp =out;
-	    while (have > 0) {
-	      auto status = write(dest, tmp, have);
-              if (status == 0) {
-                (void)deflateEnd(&strm);
-                return Z_ERRNO;
-              } else if (status < 0) {
-	      if (errno == EINTR) {
-	       continue;
-	      } else {
-		deflateEnd(&strm);
-		return Z_ERRNO;
-	      }
-	    }
-	    tmp += status;
-             have -= status;
+            const unsigned char * tmp =out;
+            while (have > 0) {
+                auto status = write(dest, tmp, have);
+                if (status == 0) {
+                    (void)deflateEnd(&strm);
+                    return Z_ERRNO;
+                } else if (status < 0) {
+                    if (errno == EINTR) {
+                        continue;
+                    } else {
+                        deflateEnd(&strm);
+                        return Z_ERRNO;
+                    }
+                }
+                tmp += status;
+                have -= status;
             }
         } while (strm.avail_out == 0);
         assert(strm.avail_in == 0);     /* all input will be used */
@@ -127,24 +128,26 @@ int inf(int source, int dest)
     strm.avail_in = 0;
     strm.next_in = Z_NULL;
     ret = inflateInit(&strm);
-    if (ret != Z_OK)
+    if (ret != Z_OK) {
         return ret;
+    }
     if (!Sirikata::installStrictSyscallFilter(false)) {
-      abort();
+        abort();
     }
 
     /* decompress until deflate stream ends or end of file */
     do {
         ssize_t status = read(source, in, CHUNK);
-	if (status < 0) {
-	  if (errno == EINTR) {
-	    continue;
-	  }
-	  (void)inflateEnd(&strm);
-	  return Z_ERRNO;
-	}
+
+        if (status < 0) {
+          if (errno == EINTR) {
+            continue;
+          }
+          (void)inflateEnd(&strm);
+          return Z_ERRNO;
+        }
         strm.avail_in = status;
-	  
+
         if (strm.avail_in == 0)
             break;
         strm.next_in = in;
@@ -164,24 +167,24 @@ int inf(int source, int dest)
                 return ret;
             }
             have = CHUNK - strm.avail_out;
-	    const unsigned char *tmp = out;
-	    do {
-	      ssize_t status = write(dest, tmp, have);
-	      if (status <0) {
-		if (errno == EINTR) {
-		  continue;
-		} else {
-		  (void)inflateEnd(&strm);
-		  return Z_ERRNO;		  
-		}
-	      } else if (status == 0) {
-		  (void)inflateEnd(&strm);
-		  return Z_ERRNO;		  
-	      } else {
-		tmp += status;
-		have -= status;
-	      }
-            } while(have > 0);
+            const unsigned char *tmp = out;
+            while(have > 0) {
+              ssize_t status = write(dest, tmp, have);
+              if (status <0) {
+                if (errno == EINTR) {
+                  continue;
+                } else {
+                  (void)inflateEnd(&strm);
+                  return Z_ERRNO;
+                }
+              } else if (status == 0) {
+                  (void)inflateEnd(&strm);
+                  return Z_ERRNO;
+              } else {
+                tmp += status;
+                have -= status;
+              }
+            }
         } while (strm.avail_out == 0);
 
         /* done when inflate() says it's done */
@@ -214,6 +217,8 @@ void zerr(int ret)
         break;
     case Z_VERSION_ERROR:
         fputs("zlib version mismatch!\n", stderr);
+      default:
+        fprintf(stderr, "zlib unknown error %d!\n", ret);
     }
 }
 
@@ -225,27 +230,35 @@ int main(int argc, char **argv)
     /* avoid end-of-line conversions */
     SET_BINARY_MODE(stdin);
     SET_BINARY_MODE(stdout);
-
+    bool compression = true;
+    int level = 6;
+    for (int i = 1; i < argc; ++i) {
+        if (strcmp(argv[i], "-d") == 0) {
+            compression = false;
+        } else if (argv[i][0] == '-' && argv[i][1] >= '0' && argv[i][1] <= '9' && argv[i][2] == '\0') {
+            level = argv[i][1] - '0';
+        } else {
+            fprintf(stderr, "usage: %s [-d] < source > dest\n", argv[0]);
+            return 1;
+        }
+    }
     /* do compression if no arguments */
-    if (argc == 1) {
-        ret = def(0, 1, 9);
-        if (ret != Z_OK)
-	  zerr(ret);
+    if (compression) {
+        ret = def(0, 1, level);
+        if (ret != Z_OK) {
+          zerr(ret);
+        }
         syscall(60, ret);
         return ret;
     }
 
     /* do decompression if -d specified */
-    else if (argc == 2 && strcmp(argv[1], "-d") == 0) {
+    else {
         ret = inf(0, 1);
         if (ret != Z_OK)
             zerr(ret);
         syscall(60, ret);
+        return ret;
     }
 
-    /* otherwise, report usage */
-    else {
-        fputs("zpipe usage: zpipe [-d] < source > dest\n", stderr);
-        return 1;
-    }
 }
